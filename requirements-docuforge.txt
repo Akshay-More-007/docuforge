@@ -1,0 +1,28 @@
+# DocuForge extra dependencies (on top of base toolkit's pyproject.toml)
+# Install with: pip install -r requirements-docuforge.txt
+
+# Document processing
+python-docx>=1.1.0
+mammoth>=1.6.0
+python-pptx>=0.6.23
+lxml>=5.2.0
+Pillow>=10.0.0
+pypdf>=5.3.0          # already in pyproject.toml — here for completeness
+
+# Vector memory
+faiss-cpu>=1.7.4
+fastembed>=0.3.0
+
+# Web search
+tavily-python>=0.3.0
+
+# Auth + Supabase
+supabase>=2.4.0
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+
+# Async compatibility for Streamlit
+nest-asyncio>=1.6.0
+
+# Already in base toolkit but listed for reference:
+# langchain-groq, langchain-google-genai, langgraph, fastapi, streamlit, python-dotenv, pypdf
