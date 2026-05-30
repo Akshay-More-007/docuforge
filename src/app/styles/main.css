@@ -1,0 +1,261 @@
+/* DocuForge — Main CSS */
+/* Aesthetic: Dark industrial with sharp amber accents */
+
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Inter:wght@300;400;500;600&display=swap');
+
+:root {
+    --bg-primary:    #0d0d0d;
+    --bg-secondary:  #141414;
+    --bg-card:       #1a1a1a;
+    --bg-input:      #111111;
+    --accent:        #f5a623;
+    --accent-dim:    #a06a10;
+    --text-primary:  #e8e8e8;
+    --text-secondary:#888888;
+    --text-muted:    #444444;
+    --border:        #2a2a2a;
+    --border-accent: #f5a623;
+    --success:       #2ecc71;
+    --error:         #e74c3c;
+    --user-bubble:   #1e1e1e;
+    --ai-bubble:     #141414;
+    --radius:        6px;
+}
+
+/* ── Global ─────────────────────────────────────────── */
+.stApp {
+    background-color: var(--bg-primary);
+    font-family: 'Inter', sans-serif;
+    color: var(--text-primary);
+}
+
+/* Hide Streamlit branding */
+#MainMenu, footer, header { visibility: hidden; }
+.stDeployButton { display: none; }
+
+/* ── Sidebar ─────────────────────────────────────────── */
+[data-testid="stSidebar"] {
+    background-color: var(--bg-secondary) !important;
+    border-right: 1px solid var(--border);
+}
+
+[data-testid="stSidebar"] .stMarkdown h1,
+[data-testid="stSidebar"] .stMarkdown h2,
+[data-testid="stSidebar"] .stMarkdown h3 {
+    font-family: 'Space Mono', monospace;
+    color: var(--accent);
+    letter-spacing: -0.5px;
+}
+
+/* ── Buttons ─────────────────────────────────────────── */
+.stButton > button {
+    background-color: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    border-radius: var(--radius);
+    padding: 8px 16px;
+    transition: all 0.15s ease;
+}
+
+.stButton > button:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background-color: rgba(245, 166, 35, 0.05);
+}
+
+/* Primary button variant */
+.stButton > button[kind="primary"] {
+    background-color: var(--accent);
+    border-color: var(--accent);
+    color: #000;
+    font-weight: 600;
+}
+
+.stButton > button[kind="primary"]:hover {
+    background-color: #e09000;
+    border-color: #e09000;
+    color: #000;
+}
+
+/* ── Inputs ──────────────────────────────────────────── */
+.stTextInput > div > div > input,
+.stTextArea > div > div > textarea,
+.stSelectbox > div > div {
+    background-color: var(--bg-input) !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text-primary) !important;
+    border-radius: var(--radius) !important;
+    font-family: 'Inter', sans-serif;
+}
+
+.stTextInput > div > div > input:focus,
+.stTextArea > div > div > textarea:focus {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 2px rgba(245, 166, 35, 0.15) !important;
+}
+
+/* ── Chat messages ───────────────────────────────────── */
+.user-message {
+    background-color: var(--user-bubble);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    margin: 8px 0;
+    margin-left: 60px;
+    font-size: 14px;
+    line-height: 1.6;
+    position: relative;
+}
+
+.user-message::before {
+    content: 'YOU';
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    color: var(--text-muted);
+    position: absolute;
+    top: -16px;
+    right: 4px;
+    letter-spacing: 1px;
+}
+
+.ai-message {
+    background-color: var(--ai-bubble);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    margin: 8px 0;
+    margin-right: 60px;
+    font-size: 14px;
+    line-height: 1.6;
+    position: relative;
+}
+
+.ai-message::before {
+    content: 'DOCUFORGE';
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    color: var(--accent);
+    position: absolute;
+    top: -16px;
+    left: 4px;
+    letter-spacing: 1px;
+}
+
+/* ── Citations ───────────────────────────────────────── */
+.citation-list {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.citation-list a {
+    color: var(--accent-dim);
+    text-decoration: none;
+}
+
+.citation-list a:hover {
+    color: var(--accent);
+    text-decoration: underline;
+}
+
+/* ── File upload area ────────────────────────────────── */
+[data-testid="stFileUploader"] {
+    border: 1px dashed var(--border) !important;
+    border-radius: var(--radius);
+    background-color: var(--bg-card);
+    transition: border-color 0.2s;
+}
+
+[data-testid="stFileUploader"]:hover {
+    border-color: var(--accent) !important;
+}
+
+/* ── Cards / containers ──────────────────────────────── */
+.doc-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    margin: 8px 0;
+    font-size: 13px;
+}
+
+.doc-card .doc-name {
+    font-family: 'Space Mono', monospace;
+    font-size: 12px;
+    color: var(--accent);
+}
+
+/* ── Logo / brand ─────────────────────────────────────── */
+.brand {
+    font-family: 'Space Mono', monospace;
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: -1px;
+}
+
+.brand-sub {
+    font-size: 10px;
+    color: var(--text-muted);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-top: -4px;
+}
+
+/* ── Status badges ───────────────────────────────────── */
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.5px;
+}
+
+.badge-success { background: rgba(46,204,113,0.15); color: var(--success); border: 1px solid rgba(46,204,113,0.3); }
+.badge-error   { background: rgba(231,76,60,0.15);  color: var(--error);   border: 1px solid rgba(231,76,60,0.3); }
+.badge-info    { background: rgba(245,166,35,0.1);  color: var(--accent);  border: 1px solid rgba(245,166,35,0.3); }
+
+/* ── Spinner / thinking indicator ───────────────────── */
+.thinking {
+    display: flex;
+    gap: 4px;
+    padding: 12px 16px;
+    margin: 8px 0;
+    margin-right: 60px;
+}
+
+.thinking span {
+    width: 6px;
+    height: 6px;
+    background: var(--accent);
+    border-radius: 50%;
+    animation: pulse 1.2s ease-in-out infinite;
+}
+
+.thinking span:nth-child(2) { animation-delay: 0.2s; }
+.thinking span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes pulse {
+    0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
+    40% { opacity: 1; transform: scale(1); }
+}
+
+/* ── Dividers ─────────────────────────────────────────── */
+hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 16px 0;
+}
+
+/* ── Scrollbar ────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: var(--bg-primary); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent-dim); }

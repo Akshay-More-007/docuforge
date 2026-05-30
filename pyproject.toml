@@ -1,9 +1,9 @@
 [project]
-name = "agent-service-toolkit"
+name = "docuforge"
 version = "0.1.0"
-description = "Full toolkit for running an AI agent service built with LangGraph, FastAPI and Streamlit"
+description = "DocuForge — a multi-agent AI system for reformatting and enhancing business documents (docx/pptx/pdf), built on LangGraph, FastAPI and Streamlit"
 readme = "README.md"
-authors = [{ name = "Joshua Carroll", email = "carroll.joshk@gmail.com" }]
+authors = [{ name = "Akshay More", email = "akshay.more00741@gmail.com" }]
 classifiers = [
     "Development Status :: 4 - Beta",
     "License :: OSI Approved :: MIT License",
