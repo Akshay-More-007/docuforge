@@ -90,6 +90,7 @@ def handle_input(user_input: str):
         requirements_met=False,
         output_doc_path="",
         retry_count=0,
+        doc_enhancements={},
         search_results=[],
         citations=[],
         relevant_history=[],

@@ -202,6 +202,14 @@ async def document_agent_node(state: AgentState) -> dict:
         enhancements = await _llm_build_docx_enhancements(
             llm, extracted_content, requirements, critic_feedback
         )
+        # Merge fixes from previous attempts: every build re-edits the ORIGINAL
+        # source, so prior fixes must be re-applied or retries would undo them.
+        prior = state.get("doc_enhancements") or {}
+        prior_fixes = prior.get("spelling_fixes") or {}
+        if prior_fixes:
+            merged = dict(prior_fixes)
+            merged.update(enhancements.get("spelling_fixes") or {})
+            enhancements["spelling_fixes"] = merged
         structure = enhancements   # non-empty dict satisfies the "built" check
         await asyncio.to_thread(
             build_docx_from_template,
@@ -210,6 +218,7 @@ async def document_agent_node(state: AgentState) -> dict:
             spelling_fixes=enhancements.get("spelling_fixes") or {},
             raci=enhancements.get("raci"),
             flow=enhancements.get("flow"),
+            uniformity=enhancements.get("uniformity"),
         )
     else:
         # Non-docx source (e.g. PDF) → build a fresh docx from scratch.
@@ -228,7 +237,15 @@ async def document_agent_node(state: AgentState) -> dict:
         }
 
     # ── Step 3: Validate ──────────────────────────────────────────────────────
-    validation = await validate_output(requirements, output_path, build_mode=build_mode)
+    uniformity_applied = bool(
+        build_mode == "docx_template"
+        and isinstance(structure, dict)
+        and structure.get("uniformity")
+    )
+    validation = await validate_output(
+        requirements, output_path, build_mode=build_mode,
+        uniformity_applied=uniformity_applied,
+    )
     requirements_met = validation.get("requirements_met", False)
     feedback = validation.get("feedback", "")
 
@@ -255,6 +272,11 @@ async def document_agent_node(state: AgentState) -> dict:
         "retry_count": retry_count + 1,
         "draft_response": draft_response,
         "active_agent": "document_agent",
+        "doc_enhancements": (
+            structure
+            if build_mode == "docx_template" and isinstance(structure, dict)
+            else state.get("doc_enhancements") or {}
+        ),
     }
 
 
@@ -305,7 +327,8 @@ Return ONLY valid JSON (no preamble, no markdown fences):
   "flow": {
     "title": "START - ...",
     "steps": [ {"stakeholder": "...", "description": "..."}, ... ]
-  }
+  },
+  "uniformity": { "apply": true, "font": "Arial", "header_fill": "C00000" }
 }
 
 SPELLING_FIXES rules:
@@ -334,6 +357,16 @@ FLOW rules:
 
 If the document clearly has no RACI-relevant content, return raci with empty lists.
 If it has no sequential process, return flow with an empty steps list.
+
+UNIFORMITY rules:
+- Set "apply": true ONLY when the user asks for visual consistency: uniform/same
+  fonts, consistent colors, standardized look, "clean up the formatting", one
+  color scheme, matching table headers, etc. Otherwise {"apply": false}.
+- "font": the exact font name ONLY if the user names one (e.g. "use Arial
+  everywhere"); otherwise null (the document's own base font is used).
+- "header_fill": a 6-digit hex color ONLY if the user names a specific color
+  (e.g. "make headers C00000" / "red C00000"); otherwise null (the document's
+  dominant existing header color is used).
 """
 
 
@@ -382,6 +415,14 @@ async def _llm_build_docx_enhancements(
         any(k in req_text for k in ("flow", "flowchart", "workflow", "diagram"))
         or _doc_has_heading(content, ["flow", "workflow"])
     )
+    want_uniform = any(
+        k in req_text
+        for k in (
+            "uniform", "consisten", "standardi", "normali", "same font", "one font",
+            "single font", "font style", "color scheme", "colour scheme",
+            "clean up", "cleanup", "tidy", "same color", "same colour",
+        )
+    )
 
     doc_view = _condense_document(content)
     all_headings = [s.get("heading", "") for s in content.get("sections", [])]
@@ -393,7 +434,8 @@ async def _llm_build_docx_enhancements(
         f"User requirements:\n" + "\n".join(f"- {r}" for r in requirements) + "\n\n"
         f"Generate: spelling_fixes (always), "
         f"{'a RACI matrix' if want_raci else 'raci with empty lists'}, "
-        f"{'a process flow' if want_flow else 'flow with empty steps'}."
+        f"{'a process flow' if want_flow else 'flow with empty steps'}, "
+        f"{'uniformity (the user wants visual consistency)' if want_uniform else 'uniformity with apply false'}."
     )
     if feedback:
         prompt += f"\n\nPrevious feedback to address:\n{feedback}"
@@ -416,6 +458,7 @@ async def _llm_build_docx_enhancements(
             "spelling_fixes": parsed.get("spelling_fixes") or {},
             "raci": None,
             "flow": None,
+            "uniformity": None,
         }
         raci = parsed.get("raci") or {}
         if want_raci and raci.get("activities") and raci.get("stakeholders"):
@@ -423,16 +466,26 @@ async def _llm_build_docx_enhancements(
         flow = parsed.get("flow") or {}
         if want_flow and flow.get("steps"):
             result["flow"] = flow
+        uni = parsed.get("uniformity") or {}
+        # Keyword hit OR an explicit LLM apply (it is instructed to only set it
+        # when the user asked) turns the pass on.
+        if want_uniform or uni.get("apply"):
+            result["uniformity"] = {
+                "apply": True,
+                "font": uni.get("font") or None,
+                "header_fill": uni.get("header_fill") or None,
+            }
 
         logger.info(
             f"[DocumentAgent] DOCX enhancements: fixes={len(result['spelling_fixes'])} "
-            f"raci={'yes' if result['raci'] else 'no'} flow={'yes' if result['flow'] else 'no'}"
+            f"raci={'yes' if result['raci'] else 'no'} flow={'yes' if result['flow'] else 'no'} "
+            f"uniformity={'yes' if result['uniformity'] else 'no'}"
         )
         return result
 
     except Exception as e:
         logger.error(f"[DocumentAgent] DOCX enhancements error: {e}")
-        return {"spelling_fixes": {}, "raci": None, "flow": None}
+        return {"spelling_fixes": {}, "raci": None, "flow": None, "uniformity": None}
 
 
 async def _llm_build_pptx(

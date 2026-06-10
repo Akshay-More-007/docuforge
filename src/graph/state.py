@@ -21,6 +21,11 @@ class AgentState(TypedDict):
     requirements_met: bool
     output_doc_path: str
     retry_count: int
+    # DOCX template-mode enhancements from the last build (spelling_fixes, raci,
+    # flow, uniformity). Carried across critic retries so fixes ACCUMULATE —
+    # each retry re-edits the original source, so dropping these would undo
+    # earlier corrections.
+    doc_enhancements: dict
 
     # Research
     search_results: list

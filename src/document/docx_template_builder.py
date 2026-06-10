@@ -59,6 +59,7 @@ def build_docx_from_template(
     spelling_fixes: dict | None = None,
     raci: dict | None = None,
     flow: dict | None = None,
+    uniformity: dict | None = None,
 ) -> str:
     """
     Open the source .docx, modify in place, save to output_path.
@@ -76,6 +77,13 @@ def build_docx_from_template(
             "title": "START – Vendor Empanelment Request",
             "steps": [{"stakeholder": "SRM Team", "description": "Initial Evaluation ..."}, ...]
         }
+        uniformity: {
+            "apply": True,
+            "font": "Arial" | None,        # None → keep the document's base font
+            "header_fill": "C00000" | None # None → keep the extracted brand color
+        }
+        Normalizes every run to one font, repaints all dark table-header fills
+        with the brand color, and unifies heading colors per level.
 
     Returns: absolute path to saved file.
     """
@@ -84,6 +92,19 @@ def build_docx_from_template(
     brand, accent = _extract_brand_colors(doc)
     base_font = _extract_default_font(doc)
     logger.info(f"[DocxTemplate] brand={brand} accent={accent} font={base_font}")
+
+    # Uniformity runs FIRST so the RACI/flow tables inserted below are styled
+    # with the (possibly overridden) uniform font + brand and are never repainted.
+    if uniformity and uniformity.get("apply"):
+        base_font = uniformity.get("font") or base_font
+        fill = uniformity.get("header_fill") or brand
+        brand = fill.lstrip("#").upper()
+        stats = _apply_uniformity(doc, font=base_font, header_fill=brand)
+        logger.info(
+            f"[DocxTemplate] Uniformity: font={base_font} fill={brand} "
+            f"runs={stats['runs_refonted']} headers={stats['headers_recolored']} "
+            f"headings={stats['headings_recolored']}"
+        )
 
     if spelling_fixes:
         n = _apply_spelling_fixes(doc, spelling_fixes)
@@ -195,6 +216,98 @@ def _apply_spelling_fixes(doc, fixes: dict) -> int:
                 for p in c.paragraphs:
                     fix_paragraph(p)
     return count
+
+
+# ── Uniformity pass (fonts, table-header fills, heading colors) ───────────────
+
+def _luminance(hex_color: str) -> float:
+    """Perceived luminance 0..1; light pastels score high, brand darks low."""
+    try:
+        r, g, b = _hex_rgb(hex_color)
+        return (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
+    except Exception:
+        return 1.0
+
+
+def _apply_uniformity(doc, *, font: str, header_fill: str) -> dict:
+    """
+    Normalize the document's look in three deterministic steps:
+      1. fonts   — every run (body + tables) and every styled font set to `font`
+      2. headers — first-row table cells with a DARK fill repainted `header_fill`
+                   (light pastels like D9E1F2 are intentional sub-headers — kept;
+                   flow tables are two-tone by design — skipped)
+      3. headings — per heading level, recolor outlier runs to the level's
+                   dominant explicit color
+    """
+    stats = {"runs_refonted": 0, "headers_recolored": 0, "headings_recolored": 0}
+
+    # 1a. Style-level fonts: any style carrying an explicit font diverging from
+    # the target gets rewritten, so style-inherited text follows too.
+    for style in doc.styles:
+        try:
+            if style.font.name and style.font.name != font:
+                style.font.name = font
+        except Exception:
+            continue
+    try:
+        doc.styles["Normal"].font.name = font
+    except Exception:
+        pass
+
+    # 1b. Run-level fonts.
+    def _refont(p):
+        for run in p.runs:
+            if run.text.strip() and run.font.name != font:
+                run.font.name = font
+                stats["runs_refonted"] += 1
+
+    for p in doc.paragraphs:
+        _refont(p)
+    for t in doc.tables:
+        for row in t.rows:
+            for c in row.cells:
+                for p in c.paragraphs:
+                    _refont(p)
+
+    # 2. Table header fills: repaint dark first-row fills to the brand color.
+    for t in doc.tables:
+        if _looks_like_flow(t._tbl):
+            continue
+        if not t.rows:
+            continue
+        for c in t.rows[0].cells:
+            f = _get_cell_fill(c)
+            if f and f.upper() != header_fill.upper() and _luminance(f) < 0.6:
+                _set_cell_fill(c, header_fill)
+                stats["headers_recolored"] += 1
+
+    # 3. Heading colors: per level, find the dominant explicit run color and
+    # apply it to every run of that level.
+    by_level: dict[str, list] = {}
+    for p in doc.paragraphs:
+        name = p.style.name if p.style else ""
+        if name.lower().startswith(("heading", "title")):
+            by_level.setdefault(name, []).append(p)
+    for name, paras in by_level.items():
+        colors: Counter = Counter()
+        for p in paras:
+            for run in p.runs:
+                if run.text.strip() and run.font.color and run.font.color.rgb:
+                    colors[str(run.font.color.rgb)] += 1
+        if not colors:
+            continue
+        dominant = colors.most_common(1)[0][0]
+        rgb = RGBColor(*_hex_rgb(dominant))
+        for p in paras:
+            for run in p.runs:
+                if not run.text.strip():
+                    continue
+                cur = str(run.font.color.rgb) if (run.font.color and run.font.color.rgb) else None
+                if cur != dominant:
+                    run.font.color.rgb = rgb
+                    stats["headings_recolored"] += 1
+
+    return stats
 
 
 # ── RACI matrix insertion ─────────────────────────────────────────────────────

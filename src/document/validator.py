@@ -47,7 +47,12 @@ If the requirements list is empty, return requirements_met=true.
 """
 
 
-async def validate_output(requirements: list[str], output_path: str, build_mode: str | None = None) -> dict:
+async def validate_output(
+    requirements: list[str],
+    output_path: str,
+    build_mode: str | None = None,
+    uniformity_applied: bool = False,
+) -> dict:
     """
     Validate output document against requirements.
 
@@ -102,6 +107,21 @@ async def validate_output(requirements: list[str], output_path: str, build_mode:
             "layout as automatically SATISFIED. Judge ONLY content changes you can "
             "verify in the text below: spelling/capitalization fixes, and the presence "
             "of requested tables such as a RACI matrix or a process-flow table.\n"
+        )
+        if uniformity_applied:
+            mode_note += (
+                "ADDITIONALLY: a deterministic uniformity pass was applied — every run "
+                "was set to one font, all dark table-header fills were repainted with "
+                "the single brand color, and heading colors were unified per level. "
+                "Treat requirements about uniform/consistent fonts, colors, or overall "
+                "visual consistency as SATISFIED.\n"
+            )
+        mode_note += (
+            "SPELLING-CHECK SCOPE: a 'spelling mistakes' requirement covers ONLY "
+            "genuinely misspelled words (e.g. 'receieve', 'addresse'). Grammar, word "
+            "forms (receive vs received), pluralisation (cv vs CVs), phrasing, and "
+            "capitalisation style are NOT spelling mistakes — do not fail the "
+            "requirement for those.\n"
         )
 
     prompt = f"""Requirements to check:
