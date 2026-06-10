@@ -23,6 +23,11 @@
 }
 
 /* ── Global ─────────────────────────────────────────── */
+/* Hide Streamlit's auto-generated pages/ navigation — routing is handled in main.py */
+[data-testid="stSidebarNav"] {
+    display: none !important;
+}
+
 .stApp {
     background-color: var(--bg-primary);
     font-family: 'Inter', sans-serif;

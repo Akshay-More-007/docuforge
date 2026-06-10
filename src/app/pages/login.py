@@ -81,11 +81,15 @@ def _render_signup_form():
             st.error("Password must be at least 8 characters.")
             return
 
-        # Check allowed emails
+        # Check allowed emails — fail closed: with no whitelist configured,
+        # signup is disabled entirely (this app is deployed on the public internet).
         import os
         allowed = os.getenv("ALLOWED_EMAILS", "")
         allowed_list = [e.strip().lower() for e in allowed.split(",") if e.strip()]
-        if allowed_list and email.lower() not in allowed_list:
+        if not allowed_list:
+            st.error("Signup is disabled: no approved emails are configured.")
+            return
+        if email.lower() not in allowed_list:
             st.error("This email is not approved for access.")
             return
 

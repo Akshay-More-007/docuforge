@@ -1,0 +1,21 @@
+# DocuForge — single-container deployment (Streamlit app with in-process agent graph).
+# Usage: docker compose -f compose.docuforge.yaml up -d --build
+services:
+  docuforge:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.docuforge
+    image: docuforge:latest
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      # Persist semantic memory in the named volume regardless of what .env says.
+      - FAISS_INDEX_DIR=/data/faiss_index
+    volumes:
+      - docuforge_faiss:/data/faiss_index
+    restart: unless-stopped
+
+volumes:
+  docuforge_faiss:

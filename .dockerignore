@@ -11,3 +11,14 @@ venv
 .venv
 *.db
 privatecredentials/*
+faiss_index
+media
+docs
+tests
+data
+.claude
+.github
+uv.lock
+*.pptx
+*.docx
+*.pdf

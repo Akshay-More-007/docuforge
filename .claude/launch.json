@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "docuforge",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "streamlit", "run", "src/app/main.py", "--server.headless", "true", "--server.port", "8501"],
+      "port": 8501,
+      "autoPort": false
+    },
+    {
+      "name": "docuforge-docker",
+      "runtimeExecutable": "docker",
+      "runtimeArgs": ["run", "--rm", "--name", "docuforge-verify", "-p", "8502:8501", "--env-file", ".env", "docuforge:latest"],
+      "port": 8502,
+      "autoPort": false
+    }
+  ]
+}

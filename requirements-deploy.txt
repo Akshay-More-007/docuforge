@@ -1,0 +1,36 @@
+# DocuForge deployment requirements — exact pins from the locally-verified environment
+# (Python 3.10). This is the import closure of src/app/main.py only; the unused
+# agent-service-toolkit extras (AWS, OpenAI, Chroma, MCP, FastAPI service) are excluded.
+
+# Core UI
+# Note: dev machine has streamlit 1.24.1, but that pins pillow<10 which conflicts
+# with fastembed>=0.8 (pillow>=10.3). 1.52 is the version the repo's pyproject
+# targets; the app uses only stable APIs and src/app/compat.py shims rerun().
+streamlit~=1.52.0
+python-dotenv==1.0.0
+
+# LLM routing + agent graph
+langchain-core==1.3.2
+langchain-groq==1.1.2
+langchain-google-genai==4.2.3
+langgraph==1.1.10
+
+# Auth (Supabase)
+supabase==2.30.0
+
+# Semantic memory
+faiss-cpu==1.13.2
+fastembed==0.8.0
+numpy==1.26.4
+
+# Document pipeline
+python-docx==1.2.0
+python-pptx==1.0.2
+mammoth==1.12.0
+pypdf==6.12.1
+lxml==6.1.1
+# Constrained by fastembed (>=10.3,<13); resolver picks within that.
+Pillow>=10.3,<13
+
+# Research agent web search
+tavily-python==0.7.24
