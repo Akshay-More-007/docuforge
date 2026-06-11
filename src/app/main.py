@@ -33,9 +33,18 @@ init_session()
 if not is_authenticated():
     from src.app.pages.login import render_login
     render_login()
+elif st.session_state.get("app_mode", "chat") == "learn":
+    from src.app.pages.learn import render_learn
+    render_learn()
 else:
-    from src.app.pages.chat import render_chat, render_input, handle_input
+    from src.app.pages.chat import (
+        render_chat, render_input, handle_input, process_pending,
+    )
     render_chat()
     user_input = render_input()
-    if user_input:
+    if st.session_state.get("pending_input"):
+        # A message was just submitted — the user bubble is already on
+        # screen; now run the agent graph (spinner + typing indicator).
+        process_pending()
+    elif user_input:
         handle_input(user_input)

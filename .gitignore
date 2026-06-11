@@ -197,3 +197,7 @@ faiss_index/
 analyze_desired.py
 check_models.py
 debug_pptx.py
+
+# SSH keys for VM deploy
+key/
+scratch/

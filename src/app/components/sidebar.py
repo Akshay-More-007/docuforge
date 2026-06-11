@@ -21,6 +21,20 @@ def render_sidebar():
         </div>
         """, unsafe_allow_html=True)
 
+        # Mode navigation: Chat ↔ Learn
+        mode = st.session_state.get("app_mode", "chat")
+        nav1, nav2 = st.columns(2)
+        with nav1:
+            if st.button("💬 Chat", use_container_width=True,
+                         type="primary" if mode == "chat" else "secondary"):
+                st.session_state.app_mode = "chat"
+                rerun()
+        with nav2:
+            if st.button("🎓 Learn", use_container_width=True,
+                         type="primary" if mode == "learn" else "secondary"):
+                st.session_state.app_mode = "learn"
+                rerun()
+
         # New Chat
         if st.button("＋  New Chat", use_container_width=True, type="primary"):
             st.session_state.current_session_id = str(uuid.uuid4())
@@ -77,33 +91,42 @@ def render_file_uploader():
         path = _save_upload(source, "source")
         if path != st.session_state.get("source_doc_path"):
             st.session_state.source_doc_path = path
-        st.markdown(
-            f"<div class='doc-card'><div class='doc-name'>📄 {source.name}</div>"
-            f"<div style='font-size:11px;color:#666;'>Source loaded</div></div>",
-            unsafe_allow_html=True,
-        )
+            st.session_state.source_doc_name = source.name
+        _doc_card("📄", source.name, len(source.getbuffer()))
 
     if template:
         path = _save_upload(template, "template")
         if path != st.session_state.get("template_doc_path"):
             st.session_state.template_doc_path = path
-        st.markdown(
-            f"<div class='doc-card'><div class='doc-name'>📋 {template.name}</div>"
-            f"<div style='font-size:11px;color:#666;'>Template loaded</div></div>",
-            unsafe_allow_html=True,
-        )
+            st.session_state.template_doc_name = template.name
+        _doc_card("📋", template.name, len(template.getbuffer()))
 
-    # Show persistent labels when no new file is selected this render
+    # Show persistent cards (with the real filename) when no new file is
+    # selected this render — the doc stays attached for the whole session.
     if st.session_state.get("source_doc_path") and not source:
-        st.markdown(
-            "<div class='doc-card'><div class='doc-name'>📄 Source loaded</div></div>",
-            unsafe_allow_html=True,
-        )
+        _doc_card("📄", st.session_state.get("source_doc_name", "Source document"))
     if st.session_state.get("template_doc_path") and not template:
-        st.markdown(
-            "<div class='doc-card'><div class='doc-name'>📋 Template loaded</div></div>",
-            unsafe_allow_html=True,
-        )
+        _doc_card("📋", st.session_state.get("template_doc_name", "Template"))
+
+    if st.session_state.get("source_doc_path") or st.session_state.get("template_doc_path"):
+        if st.button("✕  Detach documents", use_container_width=True):
+            st.session_state.source_doc_path = None
+            st.session_state.source_doc_name = None
+            st.session_state.template_doc_path = None
+            st.session_state.template_doc_name = None
+            rerun()
+
+
+def _doc_card(icon: str, name: str, size_bytes: int | None = None):
+    size = ""
+    if size_bytes:
+        kb = size_bytes / 1024
+        size = f"{kb / 1024:.1f} MB" if kb > 1024 else f"{kb:.0f} KB"
+    meta = f"<div style='font-size:11px;color:#666;'>{size or 'Attached'}</div>"
+    st.markdown(
+        f"<div class='doc-card'><div class='doc-name'>{icon} {name}</div>{meta}</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def _save_upload(file, prefix: str) -> str:

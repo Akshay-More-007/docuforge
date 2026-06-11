@@ -57,6 +57,15 @@ def clear_session():
 
 def is_authenticated() -> bool:
     """Check if user is logged in with a valid (or refreshable) token."""
+    # Local development bypass — lets the app run without a live Supabase
+    # project. NEVER set DOCUFORGE_DEV_NO_AUTH in a deployed environment.
+    if os.getenv("DOCUFORGE_DEV_NO_AUTH") == "1":
+        if not st.session_state.get("authenticated"):
+            st.session_state.authenticated = True
+            st.session_state.user_id = "dev-local"
+            st.session_state.user_email = "dev@localhost"
+        return True
+
     if not st.session_state.get("authenticated"):
         return False
 

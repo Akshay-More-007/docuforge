@@ -3,6 +3,9 @@
 
 @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Inter:wght@300;400;500;600&display=swap');
 
+/* Theme: "Forge Ember" — dark industrial base, amber primary, terracotta
+   secondary (coach/voice elements). Derived via theme-factory from the
+   Golden Hour warm-accent pairing on the existing DocuForge brand. */
 :root {
     --bg-primary:    #0d0d0d;
     --bg-secondary:  #141414;
@@ -10,6 +13,7 @@
     --bg-input:      #111111;
     --accent:        #f5a623;
     --accent-dim:    #a06a10;
+    --accent-warm:   #c1666b;   /* terracotta — interview coach / voice */
     --text-primary:  #e8e8e8;
     --text-secondary:#888888;
     --text-muted:    #444444;
@@ -20,6 +24,7 @@
     --user-bubble:   #1e1e1e;
     --ai-bubble:     #141414;
     --radius:        6px;
+    --card-shadow:   0 2px 12px rgba(0, 0, 0, 0.45);
 }
 
 /* ── Global ─────────────────────────────────────────── */
@@ -227,6 +232,63 @@
 .badge-error   { background: rgba(231,76,60,0.15);  color: var(--error);   border: 1px solid rgba(231,76,60,0.3); }
 .badge-info    { background: rgba(245,166,35,0.1);  color: var(--accent);  border: 1px solid rgba(245,166,35,0.3); }
 
+/* ── Output-ready card ───────────────────────────────── */
+.output-card {
+    background: linear-gradient(135deg, rgba(245,166,35,0.08), rgba(245,166,35,0.02));
+    border: 1px solid rgba(245, 166, 35, 0.35);
+    border-radius: var(--radius);
+    padding: 14px 18px;
+    margin: 16px 0 8px 0;
+}
+
+.output-card-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.output-card-icon {
+    font-size: 26px;
+}
+
+.output-card-meta {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+/* ── Chat message animation ──────────────────────────── */
+.user-message, .ai-message {
+    animation: fadeUp 0.25s ease-out;
+}
+
+@keyframes fadeUp {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Chat input ──────────────────────────────────────── */
+/* Older Streamlit uses .stChatInputContainer; newer uses the testid */
+.stChatInputContainer,
+[data-testid="stChatInput"] {
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius) !important;
+    background-color: var(--bg-input) !important;
+}
+
+.stChatInputContainer:focus-within,
+[data-testid="stChatInput"]:focus-within {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 2px rgba(245, 166, 35, 0.15) !important;
+}
+
+.stChatInputContainer textarea,
+[data-testid="stChatInput"] textarea {
+    background-color: var(--bg-input) !important;
+    color: var(--text-primary) !important;
+    caret-color: var(--accent) !important;
+    font-family: 'Inter', sans-serif !important;
+}
+
 /* ── Spinner / thinking indicator ───────────────────── */
 .thinking {
     display: flex;
@@ -250,6 +312,151 @@
 @keyframes pulse {
     0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
     40% { opacity: 1; transform: scale(1); }
+}
+
+/* ── Learn mode ──────────────────────────────────────── */
+.learn-section-label {
+    font-size: 11px;
+    color: #888;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin: 20px 0 8px 0;
+}
+
+.learn-mode-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px;
+    min-height: 110px;
+    margin-bottom: 6px;
+    box-shadow: var(--card-shadow);
+    transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+.learn-mode-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--accent-dim);
+}
+
+.learn-mode-card.learn-mode-active {
+    border-color: var(--accent);
+    background: rgba(245, 166, 35, 0.06);
+}
+
+.learn-question {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    margin: 12px 0 16px 0;
+    font-size: 16px;
+    line-height: 1.6;
+    box-shadow: var(--card-shadow);
+    animation: fadeUp 0.25s ease-out;
+}
+
+/* Interview coach feedback — terracotta to distinguish from quiz amber.
+   Two-class selector outranks .learn-explanation's border shorthand. */
+.learn-explanation.learn-coach {
+    border-left: 3px solid var(--accent-warm);
+}
+
+/* ── Mic / audio input ───────────────────────────────── */
+[data-testid="stAudioInput"] {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius) !important;
+}
+
+[data-testid="stAudioInput"]:focus-within,
+[data-testid="stAudioInput"]:hover {
+    border-color: var(--accent-warm) !important;
+}
+
+/* recording state: pulse the warm accent */
+[data-testid="stAudioInput"] button[kind="primary"],
+[data-testid="stAudioInput"] [data-testid="stAudioInputRecordButton"] {
+    animation: micPulse 1.6s ease-in-out infinite;
+}
+
+@keyframes micPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(193, 102, 107, 0.0); }
+    50%      { box-shadow: 0 0 0 6px rgba(193, 102, 107, 0.18); }
+}
+
+.learn-option {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    margin: 6px 0;
+    font-size: 14px;
+}
+
+.learn-option-correct {
+    border-color: rgba(46, 204, 113, 0.6);
+    background: rgba(46, 204, 113, 0.08);
+    color: var(--success);
+}
+
+.learn-option-wrong {
+    border-color: rgba(231, 76, 60, 0.6);
+    background: rgba(231, 76, 60, 0.08);
+    color: var(--error);
+}
+
+.learn-option-neutral { color: var(--text-secondary); }
+
+.learn-explanation {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    margin: 12px 0;
+    font-size: 13px;
+    line-height: 1.7;
+    color: var(--text-primary);
+    animation: fadeUp 0.25s ease-out;
+}
+
+.learn-points {
+    margin: 8px 0 0 0;
+    padding-left: 18px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.learn-flash-back {
+    background: rgba(245, 166, 35, 0.05);
+    border: 1px solid rgba(245, 166, 35, 0.35);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    margin: 4px 0 16px 0;
+    font-size: 15px;
+    line-height: 1.7;
+    animation: fadeUp 0.25s ease-out;
+}
+
+.learn-result {
+    text-align: center;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 28px;
+    margin: 12px 0;
+    box-shadow: var(--card-shadow);
+}
+
+.learn-result-score {
+    font-family: 'Space Mono', monospace;
+    font-size: 44px;
+    color: var(--accent);
+}
+
+.learn-result-score span {
+    font-size: 18px;
+    color: var(--text-secondary);
 }
 
 /* ── Dividers ─────────────────────────────────────────── */
