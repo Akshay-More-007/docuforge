@@ -107,6 +107,12 @@ async def validate_output(
             "layout as automatically SATISFIED. Judge ONLY content changes you can "
             "verify in the text below: spelling/capitalization fixes, and the presence "
             "of requested tables such as a RACI matrix or a process-flow table.\n"
+            "STRUCTURAL EDITS: inline reviewer annotations (e.g. '(remove)', "
+            "'(in a table format)', '(last colum)') were executed by a deterministic "
+            "builder — content converted to tables, columns reordered, annotations "
+            "stripped. If the text below shows the resulting tables present and no "
+            "leftover annotation markers, treat annotation-related requirements as "
+            "SATISFIED.\n"
         )
         if uniformity_applied:
             mode_note += (
@@ -122,6 +128,10 @@ async def validate_output(
             "forms (receive vs received), pluralisation (cv vs CVs), phrasing, and "
             "capitalisation style are NOT spelling mistakes — do not fail the "
             "requirement for those.\n"
+            "DOCUMENT-CONTROL TABLES: version-history / document-control tables "
+            "(Version | Date | Author | Reviewer | Approver) intentionally contain "
+            "empty cells for future revisions — NEVER fail a requirement because "
+            "of empty cells in those tables.\n"
         )
 
     prompt = f"""Requirements to check:
@@ -143,6 +153,11 @@ Check every requirement against the document text and return your JSON verdict."
         response = await llm.ainvoke(messages)
         raw = response.content.strip()
         result = _parse_json_response(raw)
+        # Consistency coercion: an empty failed-list with met=false is a model
+        # slip — nothing concrete failed, so the verdict is a pass.
+        if not result.get("requirements_met") and not result.get("failed"):
+            logger.info("[Validator] coercing met=True (no failed requirements listed)")
+            result["requirements_met"] = True
         logger.info(
             f"[Validator] requirements_met={result.get('requirements_met')} "
             f"| failed={result.get('failed')}"

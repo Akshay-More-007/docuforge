@@ -200,9 +200,9 @@ async def document_agent_node(state: AgentState) -> dict:
         output_path = os.path.join(output_dir, "output.docx")
         build_mode = "docx_template"
         enhancements = await _llm_build_docx_enhancements(
-            llm, extracted_content, requirements, critic_feedback
+            llm, extracted_content, requirements, critic_feedback, source_path
         )
-        # Merge fixes from previous attempts: every build re-edits the ORIGINAL
+        # Merge edits from previous attempts: every build re-edits the ORIGINAL
         # source, so prior fixes must be re-applied or retries would undo them.
         prior = state.get("doc_enhancements") or {}
         prior_fixes = prior.get("spelling_fixes") or {}
@@ -210,6 +210,17 @@ async def document_agent_node(state: AgentState) -> dict:
             merged = dict(prior_fixes)
             merged.update(enhancements.get("spelling_fixes") or {})
             enhancements["spelling_fixes"] = merged
+        for op_key in ("paragraph_edits", "delete_paragraphs",
+                       "table_edits", "convert_to_table"):
+            prior_ops = prior.get(op_key) or []
+            new_ops = enhancements.get(op_key) or []
+            if prior_ops:
+                seen = {json.dumps(o, sort_keys=True) for o in prior_ops}
+                merged_ops = list(prior_ops)
+                merged_ops.extend(
+                    o for o in new_ops if json.dumps(o, sort_keys=True) not in seen
+                )
+                enhancements[op_key] = merged_ops
         structure = enhancements   # non-empty dict satisfies the "built" check
         await asyncio.to_thread(
             build_docx_from_template,
@@ -219,6 +230,10 @@ async def document_agent_node(state: AgentState) -> dict:
             raci=enhancements.get("raci"),
             flow=enhancements.get("flow"),
             uniformity=enhancements.get("uniformity"),
+            paragraph_edits=enhancements.get("paragraph_edits") or [],
+            delete_paragraphs=enhancements.get("delete_paragraphs") or [],
+            table_edits=enhancements.get("table_edits") or [],
+            convert_to_table=enhancements.get("convert_to_table") or [],
         )
     else:
         # Non-docx source (e.g. PDF) → build a fresh docx from scratch.
@@ -310,15 +325,31 @@ Requirements:
 
 # ── DOCX template-mode enhancements (spelling + RACI + flow) ──────────────────
 
-DOCX_ENHANCE_SYSTEM = """You are a process-analysis specialist for business SOP documents.
+DOCX_ENHANCE_SYSTEM = """You are a senior document editor for business SOP documents.
 
-From the document provided, extract structured data as JSON. You MUST ground every
-value in the document text. Do NOT invent stakeholders, activities, or steps that
-are not described in the document. Accuracy and zero hallucination are mandatory.
+You receive a BLOCK-LEVEL view of a .docx (every paragraph with its style, every
+table with its rows). The document will be edited IN PLACE from your instructions.
+You MUST ground every value in the document text. Do NOT invent stakeholders,
+activities, or steps that are not described in the document.
 
-Return ONLY valid JSON (no preamble, no markdown fences):
+Return ONLY valid JSON (no preamble, no markdown fences, compact). STRICT JSON:
+double-quoted keys/strings, no trailing commas, escape internal quotes.
 {
   "spelling_fixes": { "wrongword": "RightWord", ... },
+  "paragraph_edits": [ {"find": "<exact full paragraph text>", "replace": "<corrected full text>"} ],
+  "delete_paragraphs": [ "<exact full paragraph text>", ... ],
+  "table_edits": [
+    {"match_header": "<distinctive text from the table's FIRST row>",
+     "headers": ["Col1", ...], "rows": [["..."], ...]}
+  ],
+  "convert_to_table": [
+    {"after_heading": "<exact heading text>",
+     "remove_until_heading": "<exact next heading text>",
+     "remove_anchor": false,
+     "delete_headings": ["<headings merged away — for TOC cleanup>"],
+     "intro": "<one-sentence lead-in paragraph or null>",
+     "headers": [...], "rows": [[...]]}
+  ],
   "raci": {
     "stakeholders": ["Team A", "Team B", ...],
     "activities": ["1. ...", "2. ...", ...],
@@ -331,10 +362,78 @@ Return ONLY valid JSON (no preamble, no markdown fences):
   "uniformity": { "apply": true, "font": "Arial", "header_fill": "C00000" }
 }
 
+INLINE REVIEWER ANNOTATIONS — the most important rule:
+Authors leave editing instructions INSIDE the text, e.g. "(remove)", "(last colum)",
+"(Table frequency POC in a table format)", or a stray pseudo-heading like
+"SL no Compliance requirement frequency". You MUST detect these, EXECUTE the
+instruction, and REMOVE the annotation text itself:
+- "...(remove)" on a word/header  → paragraph_edits or table_edits deleting just
+  the annotation (e.g. "Retention Period(remove)" → "Retention Period").
+- "(... in a table format)" near loose numbered lines or bullets → a
+  convert_to_table op that turns that content into a proper table, plus
+  delete_paragraphs for the stray loose lines.
+- Choose after_heading so that NOTHING you want to keep sits inside the swept
+  range — the sweep removes EVERYTHING between the anchor and the stop heading.
+  Keep section intro sentences and goal/objective bullets by anchoring at the
+  more specific sub-heading and removing stray lines via delete_paragraphs.
+- "ColumnName(last colum)" in a table header → table_edits rebuilding that table
+  with the column moved to be the LAST column.
+- A pseudo-heading listing column names ("SL no Compliance requirement frequency")
+  followed by bullets → convert_to_table: bullets become rows, with columns from
+  the pseudo-heading; after_heading is the REAL section heading above it and
+  remove_until_heading is the next real heading.
+- delete_headings MUST list EVERY heading-styled line inside the swept range —
+  sub-headings being merged away AND stray pseudo-headings. Any heading NOT
+  listed there stops the sweep early. Listing them also removes their manual
+  Table-of-Contents copies.
+- NEVER emit an edit whose "replace" text equals its "find" text — only emit
+  edits that actually change something.
+
+TABLE REBUILD QUALITY rules (table_edits + convert_to_table):
+- Add a "Sr. No"/"SL No" first column with 1,2,3... when rebuilding a table that
+  lists items, matching the style of other tables in the document.
+- Fill EMPTY cells with grounded content inferred from the same row + the
+  surrounding document (e.g. an audit activity's frequency or evidence).
+- Expand terse/broken cell text into clear professional sentences — but ONLY
+  using facts already in the document. Fix "Manage services"→"Managed Services"
+  style casing issues. Use "&" not "&amp;".
+- Keep every data row from the source unless an annotation says to remove it.
+- Remove stray junk fragments inside cells (e.g. a dangling "1 renewal.sow")
+  via a table_edits rebuild or cell_edits.
+- When converting bullets shaped like "Label: description text", give Label its
+  own column (e.g. "Compliance Requirement") and the text a "Description"
+  column — don't collapse them into one cell.
+- NEVER touch the document-control / version-history table (Version | Date |
+  Author | ...) — empty cells there are intentional.
+- Do NOT rebuild tables that need no change; only emit table_edits for tables
+  with annotations, broken/incomplete content, or column-order instructions.
+- When a section's bullet list duplicates what the new table will contain, sweep
+  it: convert_to_table with remove_until_heading set to the NEXT section heading;
+  list merged-away sub-headings in delete_headings so the manual TOC is cleaned.
+
+PARAGRAPH_EDITS rules:
+- Use for grammar/casing fixes spanning a whole line: leading stray punctuation
+  (".Once" → "Once"), heading case ("4.2 non-incentive position Broadcasting" →
+  "4.2 Non-Incentive Position Broadcasting"), subject-verb agreement.
+- "find" must be the EXACT full paragraph text as shown in the block view.
+- A paragraph edit must PRESERVE the meaning and every fact, name, tool and
+  reference in the original — never summarise, shorten or drop information.
+
+DELETE_PARAGRAPHS rules:
+- ONLY for: stray annotation lines, loose numbered fragments being replaced by a
+  table you are creating, and manual-TOC entries of headings that were merged
+  away. NEVER delete real procedure/content paragraphs or section headings —
+  step-by-step instructions must stay even if they look repetitive.
+
 SPELLING_FIXES rules:
-- Include ONLY real, unambiguous fixes you can see in the text: typos, inconsistent
-  capitalisation of product/brand names (e.g. "Docusign" -> "DocuSign"), obvious
-  misspellings. Use exact substrings as they appear. Empty {} if none found.
+- These are GLOBAL substring replacements across the whole document. Include
+  ONLY real, unambiguous fixes: typos, inconsistent capitalisation of
+  product/brand names (e.g. "Docusign" -> "DocuSign"), obvious misspellings.
+  Use exact substrings as they appear. Empty {} if none found.
+- NEVER use a spelling fix to change the capitalisation of a generic lowercase
+  word (e.g. "broadcasting" -> "Broadcasting") — it would corrupt mid-sentence
+  text everywhere. Use paragraph_edits for one-line casing fixes instead.
+- Never emit an entry whose value equals its key.
 - Do NOT include proper nouns you are unsure about.
 
 RACI rules (R=Responsible, A=Accountable, C=Consulted, I=Informed):
@@ -379,6 +478,51 @@ def _doc_has_heading(content: dict, keywords: list[str]) -> bool:
     return False
 
 
+def _build_docx_block_view(
+    source_path: str,
+    per_para_chars: int = 400,
+    per_cell_chars: int = 240,
+    total_cap: int = 90000,
+) -> str:
+    """
+    Full block-level view of a .docx for granular editing: every body paragraph
+    (with style) and every table (with all rows), in document order. This is what
+    lets the LLM produce exact-match anchors for paragraph/table edits.
+    """
+    from docx import Document
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+    from docx.oxml.ns import qn
+
+    doc = Document(source_path)
+    lines: list[str] = []
+    ti = 0
+    for child in doc.element.body.iterchildren():
+        if child.tag == qn("w:p"):
+            p = Paragraph(child, doc)
+            txt = p.text.strip()
+            if not txt:
+                continue
+            style = p.style.name if p.style else "Normal"
+            if len(txt) > per_para_chars:
+                txt = txt[:per_para_chars] + "…"
+            lines.append(f"[{style}] {txt}")
+        elif child.tag == qn("w:tbl"):
+            ti += 1
+            tbl = Table(child, doc)
+            lines.append(f"[TABLE {ti}] {len(tbl.rows)}x{len(tbl.columns)}")
+            for row in tbl.rows:
+                cells = []
+                for c in row.cells:
+                    t = " ".join(c.text.split())
+                    if len(t) > per_cell_chars:
+                        t = t[:per_cell_chars] + "…"
+                    cells.append(t)
+                lines.append("  | " + " | ".join(cells))
+    view = "\n".join(lines)
+    return view[:total_cap]
+
+
 def _condense_document(content: dict, per_section_chars: int = 320, total_cap: int = 28000) -> str:
     """
     Build a compact full-document view: every section heading + a snippet of its
@@ -398,11 +542,12 @@ def _condense_document(content: dict, per_section_chars: int = 320, total_cap: i
 
 
 async def _llm_build_docx_enhancements(
-    llm, content: dict, requirements: list, feedback: str
+    llm, content: dict, requirements: list, feedback: str,
+    source_path: str | None = None,
 ) -> dict:
     """
-    Generate grounded spelling fixes + RACI matrix + process flow for DOCX
-    template-mode. Returns {"spelling_fixes": {...}, "raci": {...}, "flow": {...}}.
+    Generate grounded edits for DOCX template-mode: spelling fixes, granular
+    paragraph/table edits (incl. inline reviewer annotations), RACI + flow.
     Any piece may be empty/None if not applicable or on failure.
     """
     req_text = " ".join(requirements).lower()
@@ -424,17 +569,28 @@ async def _llm_build_docx_enhancements(
         )
     )
 
-    doc_view = _condense_document(content)
+    # Block-level view (exact anchors for granular edits); falls back to the
+    # condensed section view when the source can't be re-read.
+    doc_view = ""
+    if source_path:
+        try:
+            doc_view = await asyncio.to_thread(_build_docx_block_view, source_path)
+        except Exception as e:
+            logger.warning(f"[DocumentAgent] block view failed, using condensed: {e}")
+    if not doc_view:
+        doc_view = _condense_document(content)
     all_headings = [s.get("heading", "") for s in content.get("sections", [])]
 
     prompt = (
         f"Document title: {content.get('filename', 'document')}\n\n"
         f"All section headings (in order):\n{json.dumps(all_headings, ensure_ascii=False)[:6000]}\n\n"
-        f"Condensed document content:\n{doc_view}\n\n"
+        f"Block-level document content (style-tagged paragraphs + full tables):\n{doc_view}\n\n"
         f"User requirements:\n" + "\n".join(f"- {r}" for r in requirements) + "\n\n"
-        f"Generate: spelling_fixes (always), "
-        f"{'a RACI matrix' if want_raci else 'raci with empty lists'}, "
-        f"{'a process flow' if want_flow else 'flow with empty steps'}, "
+        f"Generate: spelling_fixes (always); paragraph_edits / delete_paragraphs / "
+        f"table_edits / convert_to_table for every inline reviewer annotation and "
+        f"every granular quality fix you find (empty lists when none); "
+        f"{'a RACI matrix' if want_raci else 'raci with empty lists'}; "
+        f"{'a process flow' if want_flow else 'flow with empty steps'}; "
         f"{'uniformity (the user wants visual consistency)' if want_uniform else 'uniformity with apply false'}."
     )
     if feedback:
@@ -445,47 +601,81 @@ async def _llm_build_docx_enhancements(
         HumanMessage(content=prompt),
     ]
 
-    try:
-        response = await llm.ainvoke(messages)
-        raw = response.content.strip()
-        parsed = _strip_and_parse_json(raw)
-        if not isinstance(parsed, dict):
-            logger.warning("[DocumentAgent] DOCX enhancements: non-dict result")
-            return {"spelling_fixes": {}, "raci": None, "flow": None}
+    empty = {
+        "spelling_fixes": {}, "paragraph_edits": [], "delete_paragraphs": [],
+        "table_edits": [], "convert_to_table": [],
+        "raci": None, "flow": None, "uniformity": None,
+    }
 
-        # Normalise / guard
-        result = {
-            "spelling_fixes": parsed.get("spelling_fixes") or {},
-            "raci": None,
-            "flow": None,
-            "uniformity": None,
-        }
-        raci = parsed.get("raci") or {}
-        if want_raci and raci.get("activities") and raci.get("stakeholders"):
-            result["raci"] = raci
-        flow = parsed.get("flow") or {}
-        if want_flow and flow.get("steps"):
-            result["flow"] = flow
-        uni = parsed.get("uniformity") or {}
-        # Keyword hit OR an explicit LLM apply (it is instructed to only set it
-        # when the user asked) turns the pass on.
-        if want_uniform or uni.get("apply"):
-            result["uniformity"] = {
-                "apply": True,
-                "font": uni.get("font") or None,
-                "header_fill": uni.get("header_fill") or None,
-            }
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = await llm.ainvoke(messages)
+            raw = _response_text(response)
+            parsed = _strip_and_parse_json(raw)
+            break
+        except json.JSONDecodeError as e:
+            # Large edit plans occasionally come back with a JSON slip
+            # (trailing comma, bad escape) — one regeneration usually fixes it.
+            if attempt < max_retries - 1:
+                logger.warning(f"[DocumentAgent] enhancements JSON invalid "
+                               f"({e}), regenerating")
+                continue
+            logger.error(f"[DocumentAgent] DOCX enhancements error: {e}")
+            return dict(empty)
+        except Exception as e:
+            err_str = str(e)
+            if ("429" in err_str or "rate_limit" in err_str.lower()) and attempt < max_retries - 1:
+                wait = _parse_retry_after(err_str) or (2 ** attempt * 5)
+                logger.warning(f"[DocumentAgent] enhancements rate-limited, retry in {wait:.1f}s")
+                await asyncio.sleep(wait)
+                continue
+            logger.error(f"[DocumentAgent] DOCX enhancements error: {e}")
+            return dict(empty)
+    else:
+        return dict(empty)
 
-        logger.info(
-            f"[DocumentAgent] DOCX enhancements: fixes={len(result['spelling_fixes'])} "
-            f"raci={'yes' if result['raci'] else 'no'} flow={'yes' if result['flow'] else 'no'} "
-            f"uniformity={'yes' if result['uniformity'] else 'no'}"
+    # Some models wrap the object in a one-element list
+    if isinstance(parsed, list) and len(parsed) == 1 and isinstance(parsed[0], dict):
+        parsed = parsed[0]
+    if not isinstance(parsed, dict):
+        logger.warning(
+            f"[DocumentAgent] DOCX enhancements: non-dict result "
+            f"({type(parsed).__name__}); raw head: {raw[:200]!r}"
         )
-        return result
+        return dict(empty)
 
-    except Exception as e:
-        logger.error(f"[DocumentAgent] DOCX enhancements error: {e}")
-        return {"spelling_fixes": {}, "raci": None, "flow": None, "uniformity": None}
+    # Normalise / guard
+    result = dict(empty)
+    result["spelling_fixes"] = parsed.get("spelling_fixes") or {}
+    for key in ("paragraph_edits", "delete_paragraphs", "table_edits", "convert_to_table"):
+        val = parsed.get(key)
+        result[key] = val if isinstance(val, list) else []
+
+    raci = parsed.get("raci") or {}
+    if want_raci and raci.get("activities") and raci.get("stakeholders"):
+        result["raci"] = raci
+    flow = parsed.get("flow") or {}
+    if want_flow and flow.get("steps"):
+        result["flow"] = flow
+    uni = parsed.get("uniformity") or {}
+    # Keyword hit OR an explicit LLM apply (it is instructed to only set it
+    # when the user asked) turns the pass on.
+    if want_uniform or uni.get("apply"):
+        result["uniformity"] = {
+            "apply": True,
+            "font": uni.get("font") or None,
+            "header_fill": uni.get("header_fill") or None,
+        }
+
+    logger.info(
+        f"[DocumentAgent] DOCX enhancements: fixes={len(result['spelling_fixes'])} "
+        f"para_edits={len(result['paragraph_edits'])} deletes={len(result['delete_paragraphs'])} "
+        f"table_edits={len(result['table_edits'])} converts={len(result['convert_to_table'])} "
+        f"raci={'yes' if result['raci'] else 'no'} flow={'yes' if result['flow'] else 'no'} "
+        f"uniformity={'yes' if result['uniformity'] else 'no'}"
+    )
+    return result
 
 
 async def _llm_build_pptx(
@@ -575,8 +765,31 @@ async def _llm_build_pptx(
                 "theme": canon_theme,
             })
 
+    _harmonize_table_headers(all_slides)
+
     logger.info(f"[DocumentAgent] Built {len(all_slides)} slides via per-slide processing")
     return all_slides
+
+
+def _harmonize_table_headers(slides: list[dict]) -> None:
+    """
+    Per-slide LLM calls can normalize the same header differently across slides
+    (e.g. "Sl No" vs "SL No"). For tables sharing the same column signature
+    (case-insensitive), rewrite headers to the first slide's variant.
+    """
+    canon: dict[tuple, list] = {}
+    for s in slides:
+        table = s.get("table") or {}
+        headers = table.get("headers") or []
+        if not headers:
+            continue
+        sig = tuple(" ".join(str(h).split()).casefold() for h in headers)
+        if sig in canon:
+            table["headers"] = list(canon[sig])
+            if table.get("all_rows"):
+                table["all_rows"][0] = list(canon[sig])
+        else:
+            canon[sig] = list(headers)
 
 
 PPTX_SINGLE_SLIDE_SYSTEM = """You are a presentation design specialist.
@@ -615,6 +828,21 @@ LAYOUT RULES:
 - Slides with ONLY bullets/text (no table) → "title_content"
 - Slides with a TABLE → "title_content"  ← IMPORTANT: use title_content, NOT blank
 - "blank" is for rare cases with no title at all
+
+GRANULAR TEXT NORMALIZATION (apply to titles AND every table cell):
+- Title Case for titles and category values: "Permanent staffing" → "Permanent Staffing",
+  "Manage services" → "Managed Services", "GIG workforce" → "GIG Workforce".
+- Hyphen-as-dash in titles becomes a spaced en dash: "Vendor-RFP" → "Vendor – RFP".
+- Header cells use consistent casing: "SL NO"/"Sl no" → "Sl No", "source" → "Source".
+  Abbreviate over-long headers sensibly (e.g. "TA Evaluation" → "TA Eval" on dense tables).
+- Fix numbered-note artifacts: "1.." → "1.", remove empty leaders like "1. 2.Text" →
+  "1.Text", split run-on notes into "1.… 2.…" sequences ending with periods.
+- Fix obvious typos ("Limted" → "Limited") and ALL-CAPS company names → Title Case
+  ("PEOPLELOGIC BUSINESS SOLUTIONS PRIVATE LIMITED" → "Peoplelogic Business Solutions
+  Private Limited"). Normalize "Pvt.Ltd." → "Pvt. Ltd.".
+- Keep acronyms uppercase: RFP, TA, DPSC, MSA, SLA, QBR, PO, GIG.
+- NEVER change facts, numbers, dates, or vendor identities — only spelling,
+  casing, spacing and punctuation.
 
 FONT SIZE RULES:
 - Cover slide title (layout=title): use 36pt for title
@@ -693,7 +921,7 @@ async def _llm_process_single_slide(
             else:
                 response = await llm.ainvoke(messages)
 
-            raw    = response.content.strip()
+            raw    = _response_text(response)
             parsed = _strip_and_parse_json(raw)
 
             if isinstance(parsed, dict):
@@ -877,11 +1105,28 @@ def _enforce_theme(llm_theme: dict, canon: dict) -> dict:
 
 # ── JSON parsing utility ──────────────────────────────────────────────────────
 
+def _response_text(response) -> str:
+    """
+    Normalize an LLM response's content to a string.
+    Gemini can return content as a LIST of parts (strings / {'text': ...} dicts).
+    """
+    content = response.content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict):
+                parts.append(part.get("text", ""))
+        content = "".join(parts)
+    return str(content).strip()
+
+
 async def _call_llm_json(llm, messages) -> list:
     """Call LLM and parse JSON response. Returns empty list on failure."""
     try:
         response = await llm.ainvoke(messages)
-        raw = response.content.strip()
+        raw = _response_text(response)
         parsed = _strip_and_parse_json(raw)
 
         # Accept both list and {"slides": [...]} / {"blocks": [...]}

@@ -38,13 +38,31 @@ from pathlib import Path
 from pptx import Presentation
 from pptx.util import Inches, Pt, Emu
 from pptx.dml.color import RGBColor
-from pptx.enum.text import PP_ALIGN
+from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 logger = logging.getLogger(__name__)
 
 # CGI table style GUID — produces dark header + banded rows from theme colors
 CGI_TABLE_STYLE_ID = "{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}"
+
+# "No Style, No Grid" — transparent table used with a gradient header bar behind
+# the first row (the CGI clean-deck design).
+TRANSPARENT_TABLE_STYLE_ID = "{5940675A-B579-460E-94D1-54222C63F5DA}"
+
+# CGI brand gradient (red → magenta → purple) for the header bar fallback
+CGI_GRADIENT_STOPS = [(0, "E31937"), (60000, "A82465"), (100000, "5236AB")]
+
+# Uniform table-slide geometry (matches the CGI reference design)
+REF_GEOM = {
+    "left":   Inches(0.53),
+    "top":    Inches(0.79),
+    "width":  Inches(12.02),
+    "bar_h":  Inches(0.54),
+    "title_top": Inches(0.25),
+    "title_h":   Inches(0.54),
+    "bottom_margin": Inches(0.15),
+}
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -82,10 +100,14 @@ def _build_pptx_from_template(slides: list[dict], output_path: str, template_pat
         f"[PPTBuilder] Template mode: {n_source} source slides → {n_target} output slides"
     )
 
+    # Reference design: a source slide that already pairs a table with a gradient
+    # header bar defines the uniform look every other table slide is rebuilt to.
+    ref = _find_reference_design(prs)
+
     # ── Modify existing slides ────────────────────────────────────────────────
     for i, slide_data in enumerate(slides):
         if i < n_source:
-            _modify_slide_in_place(source_slides[i], slide_data)
+            _modify_slide_in_place(source_slides[i], slide_data, ref)
         else:
             # More output slides than source → add fresh slides
             layout_map = _build_layout_map(prs)
@@ -124,20 +146,21 @@ def _build_pptx_blank(slides: list[dict], output_path: str) -> str:
 
 # ── In-place slide modification (template mode) ───────────────────────────────
 
-def _modify_slide_in_place(slide, data: dict) -> None:
+def _modify_slide_in_place(slide, data: dict, ref: dict | None = None) -> None:
     """
     Update a slide's content while preserving its design elements.
 
     Modifies:
-    - Title placeholder text
-    - For table slides: replaces TABLE shape(s) with new table
+    - Title placeholder text (run formatting preserved)
+    - For table slides: normalizes the slide to the deck's reference design —
+      uniform title strip, gradient header bar, transparent table style
     - For agenda slides: fills numbered placeholder text
     - For cover slide: updates subtitle TextBox if present
 
     Preserves:
     - GROUP shapes (design graphics)
     - PICTURE shapes (logos)
-    - AUTO_SHAPE gradient rectangles (header gradient effect)
+    - Existing gradient header bars (reused, never duplicated)
     - Background and layout
     """
     title_text = data.get("title", "")
@@ -152,18 +175,37 @@ def _modify_slide_in_place(slide, data: dict) -> None:
         for ph in slide.placeholders:
             if ph.placeholder_format.idx == 0:
                 _replace_placeholder_text(ph, title_text)
-                # For table slides: explicitly set 28pt to prevent overflow
-                # (The CGI master default is ~40pt; 28pt matches desired output)
+                # Table slides: normalize the title strip geometry (keep the
+                # slide's own left/width so the design stays untouched)
                 if table_data:
-                    _set_placeholder_font_size(ph, 28)
+                    ph.top    = REF_GEOM["title_top"]
+                    ph.height = REF_GEOM["title_h"]
                 break
 
-    # ── 2. Table slides: replace TABLE with new data ──────────────────────────
+    # ── 2. Table slides: normalize to the reference design ────────────────────
     if table_data:
-        # Find the first existing table to get its position
-        existing_tbl_pos = _get_table_position(slide)
-        _remove_table_shapes(slide)
-        _add_cgi_table(slide, table_data, existing_tbl_pos)
+        existing_bar = _slide_gradient_bar(slide)
+        existing_tbl = next(
+            (s for s in slide.shapes if s.shape_type == MSO_SHAPE_TYPE.TABLE), None
+        )
+
+        # Slide already in reference shape (e.g. the reference slide itself) and
+        # the table dimensions are unchanged → just update cell texts in place.
+        updated_in_place = (
+            existing_bar is not None
+            and existing_tbl is not None
+            and _update_table_texts_in_place(existing_tbl, table_data)
+        )
+        if not updated_in_place:
+            _remove_table_shapes(slide)
+            if existing_bar is None:
+                _add_header_bar(slide, ref)
+            else:
+                existing_bar.left   = REF_GEOM["left"]
+                existing_bar.top    = REF_GEOM["top"]
+                existing_bar.width  = REF_GEOM["width"]
+                existing_bar.height = REF_GEOM["bar_h"]
+            _add_reference_table(slide, table_data, ref)
 
     # ── 3. Agenda slide: fill numbered section placeholders ───────────────────
     elif is_agenda:
@@ -183,18 +225,313 @@ def _modify_slide_in_place(slide, data: dict) -> None:
 
 
 def _replace_placeholder_text(ph, text: str) -> None:
-    """Replace all text in a placeholder while preserving paragraph formatting."""
+    """Replace all text in a placeholder, preserving the first run's formatting."""
     tf = ph.text_frame
     # Clear all paragraphs except the first
     while len(tf.paragraphs) > 1:
         p = tf.paragraphs[-1]._p
         p.getparent().remove(p)
-    # Clear runs from first paragraph and set text
     para = tf.paragraphs[0]
-    for run in list(para.runs):
-        run._r.getparent().remove(run._r)
-    run = para.add_run()
-    run.text = text
+    runs = para.runs
+    if runs:
+        # Reuse the first run (keeps its rPr: size, color, font) — drop the rest
+        runs[0].text = text
+        for run in runs[1:]:
+            run._r.getparent().remove(run._r)
+    else:
+        run = para.add_run()
+        run.text = text
+
+
+# ── Reference design (gradient header bar + transparent table) ────────────────
+
+def _slide_gradient_bar(slide):
+    """Find a slim, wide AUTO_SHAPE with a gradient fill (a header bar)."""
+    for shape in slide.shapes:
+        try:
+            if shape.shape_type not in (MSO_SHAPE_TYPE.AUTO_SHAPE,):
+                continue
+            if shape.height < Inches(1.0) and shape.width > Inches(6.0) \
+                    and "gradFill" in shape._element.xml:
+                return shape
+        except Exception:
+            continue
+    return None
+
+
+def _find_reference_design(prs) -> dict:
+    """
+    Scan the deck for a slide that pairs a TABLE with a gradient header bar —
+    that slide defines the clean design every table slide is normalized to.
+    Falls back to the CGI defaults when no such slide exists.
+    """
+    ref = {
+        "bar_el": None,
+        "style_id": TRANSPARENT_TABLE_STYLE_ID,
+        "font": "Arial",
+        "hdr_sz": 18,
+        "body_sz": 11,
+    }
+    import re as _re
+    for slide in prs.slides:
+        bar = _slide_gradient_bar(slide)
+        tbl_shape = next(
+            (s for s in slide.shapes if s.shape_type == MSO_SHAPE_TYPE.TABLE), None
+        )
+        if bar is None or tbl_shape is None:
+            continue
+        ref["bar_el"] = bar._element
+        xml = tbl_shape._element.xml
+        m = _re.search(r"<a:tableStyleId>([^<]+)</a:tableStyleId>", xml)
+        if m:
+            ref["style_id"] = m.group(1)
+        m = _re.search(r'typeface="([^"]+)"', xml)
+        if m:
+            ref["font"] = m.group(1)
+        trs = _re.findall(r"<a:tr .*?</a:tr>", xml, _re.DOTALL)
+        if trs:
+            szs = _re.findall(r'sz="(\d+)"', trs[0])
+            if szs:
+                ref["hdr_sz"] = int(szs[0]) / 100
+        if len(trs) > 1:
+            szs = _re.findall(r'sz="(\d+)"', trs[1])
+            if szs:
+                ref["body_sz"] = int(szs[0]) / 100
+        logger.info(
+            f"[PPTBuilder] Reference design found: style={ref['style_id']} "
+            f"font={ref['font']} hdr={ref['hdr_sz']}pt body={ref['body_sz']}pt"
+        )
+        break
+    return ref
+
+
+def _add_header_bar(slide, ref: dict | None) -> None:
+    """Insert the gradient header bar behind the table header row."""
+    import copy
+    from pptx.oxml.ns import qn
+    from lxml import etree
+
+    spTree = slide.shapes._spTree
+    geom = REF_GEOM
+
+    if ref and ref.get("bar_el") is not None:
+        bar = copy.deepcopy(ref["bar_el"])
+        # unique shape id + canonical name
+        cNvPr = bar.find(".//" + qn("p:cNvPr"))
+        if cNvPr is not None:
+            cNvPr.set("id", str(_next_shape_id(slide)))
+            cNvPr.set("name", "Header Gradient")
+        # normalize geometry
+        xfrm = bar.find(".//" + qn("a:xfrm"))
+        if xfrm is not None:
+            off = xfrm.find(qn("a:off"))
+            ext = xfrm.find(qn("a:ext"))
+            if off is not None:
+                off.set("x", str(int(geom["left"])))
+                off.set("y", str(int(geom["top"])))
+            if ext is not None:
+                ext.set("cx", str(int(geom["width"])))
+                ext.set("cy", str(int(geom["bar_h"])))
+        spTree.append(bar)
+        return
+
+    # No reference bar in the deck → build the CGI gradient rect from scratch
+    stops = "".join(
+        f'<a:gs pos="{pos}"><a:srgbClr val="{color}"/></a:gs>'
+        for pos, color in CGI_GRADIENT_STOPS
+    )
+    nsmap = (
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+        'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"'
+    )
+    sp_xml = (
+        f"<p:sp {nsmap}>"
+        f'<p:nvSpPr><p:cNvPr id="{_next_shape_id(slide)}" name="Header Gradient"/>'
+        f"<p:cNvSpPr/><p:nvPr/></p:nvSpPr>"
+        f'<p:spPr bwMode="gray">'
+        f'<a:xfrm><a:off x="{int(geom["left"])}" y="{int(geom["top"])}"/>'
+        f'<a:ext cx="{int(geom["width"])}" cy="{int(geom["bar_h"])}"/></a:xfrm>'
+        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        f'<a:gradFill><a:gsLst>{stops}</a:gsLst><a:lin ang="0" scaled="0"/></a:gradFill>'
+        f'<a:ln w="9525"><a:noFill/></a:ln><a:effectLst/>'
+        f"</p:spPr>"
+        f'<p:txBody><a:bodyPr rtlCol="0" anchor="ctr"/><a:lstStyle/><a:p/></p:txBody>'
+        f"</p:sp>"
+    )
+    spTree.append(etree.fromstring(sp_xml))
+
+
+def _next_shape_id(slide) -> int:
+    """Return a shape id not yet used on the slide."""
+    used = set()
+    for shape in slide.shapes:
+        try:
+            used.add(shape.shape_id)
+        except Exception:
+            continue
+    return max(used, default=1) + 1
+
+
+def _update_table_texts_in_place(tbl_shape, table_data: dict) -> bool:
+    """
+    Update an existing table's cell texts without touching any formatting.
+    Returns False when dimensions don't match (caller rebuilds instead).
+    """
+    headers  = table_data.get("headers") or []
+    rows     = table_data.get("rows") or []
+    all_rows = table_data.get("all_rows") or ([headers] + rows if headers else rows)
+    if not all_rows:
+        return False
+
+    tbl = tbl_shape.table
+    if len(tbl.rows) != len(all_rows):
+        return False
+    n_cols = len(tbl.columns)
+    if max(len(r) for r in all_rows) != n_cols:
+        return False
+
+    for ri, row_data in enumerate(all_rows):
+        for ci in range(n_cols):
+            cell = tbl.cell(ri, ci)
+            new_text = str(row_data[ci]) if ci < len(row_data) else ""
+            tf = cell.text_frame
+            while len(tf.paragraphs) > 1:
+                p = tf.paragraphs[-1]._p
+                p.getparent().remove(p)
+            para = tf.paragraphs[0]
+            runs = para.runs
+            if runs:
+                runs[0].text = new_text
+                for run in runs[1:]:
+                    run._r.getparent().remove(run._r)
+            elif new_text:
+                run = para.add_run()
+                run.text = new_text
+    logger.debug("[PPTBuilder] Table texts updated in place")
+    return True
+
+
+def _content_weighted_widths(all_rows: list, n_cols: int, total_emu: int) -> list[int]:
+    """Distribute table width across columns weighted by their longest content."""
+    weights = []
+    for ci in range(n_cols):
+        longest = 4
+        for row in all_rows:
+            if ci < len(row):
+                longest = max(longest, len(str(row[ci])))
+        weights.append(max(5, min(longest, 70)))
+    total_w = sum(weights)
+    widths = [max(int(total_emu * w / total_w), int(Inches(0.45))) for w in weights]
+    # Renormalize: floors/rounding can overshoot — absorb into the widest column
+    delta = total_emu - sum(widths)
+    widths[widths.index(max(widths))] += delta
+    return widths
+
+
+def _add_reference_table(slide, table_data: dict, ref: dict | None) -> None:
+    """
+    Add a table in the deck's reference design: uniform geometry, transparent
+    style (gradient bar provides the header background), white bold centered
+    header text, content-weighted column widths.
+    """
+    headers  = table_data.get("headers") or []
+    rows     = table_data.get("rows") or []
+    all_rows = table_data.get("all_rows") or ([headers] + rows if headers else rows)
+    if not all_rows:
+        return
+
+    num_rows = len(all_rows)
+    num_cols = max(len(r) for r in all_rows)
+    if num_cols == 0:
+        return
+
+    ref = ref or {}
+    font_name = ref.get("font", "Arial")
+    hdr_sz    = float(ref.get("hdr_sz", 18))
+    body_sz   = float(ref.get("body_sz", 11))
+    if num_cols >= 7:
+        hdr_sz = min(hdr_sz, 16.0)
+
+    geom = REF_GEOM
+    slide_h = Inches(7.5)
+    avail_h = slide_h - geom["top"] - geom["bottom_margin"]
+    hdr_h   = Emu(490000)                  # header row ≈ gradient bar height
+    n_data  = max(num_rows - 1, 1)
+    data_h  = min(Emu(799000), Emu(int((avail_h - hdr_h) / n_data)))
+    tbl_h   = Emu(int(hdr_h) + int(data_h) * n_data)
+
+    tbl_shape = slide.shapes.add_table(
+        num_rows, num_cols, geom["left"], geom["top"], geom["width"], tbl_h
+    )
+    try:
+        tbl_shape.name = "Table"
+    except Exception:
+        pass
+    tbl = tbl_shape.table
+
+    _set_table_style_id(tbl_shape, ref.get("style_id", TRANSPARENT_TABLE_STYLE_ID))
+
+    widths = _content_weighted_widths(all_rows, num_cols, int(geom["width"]))
+    for ci, col in enumerate(tbl.columns):
+        col.width = Emu(widths[ci])
+
+    tbl.rows[0].height = Emu(int(hdr_h))
+    for ri in range(1, num_rows):
+        tbl.rows[ri].height = Emu(int(data_h))
+
+    for ri, row_data in enumerate(all_rows):
+        is_header = ri == 0 and bool(headers)
+        for ci in range(num_cols):
+            cell = tbl.cell(ri, ci)
+            cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+            tf = cell.text_frame
+            tf.word_wrap = True
+            para = tf.paragraphs[0]
+            for run in list(para.runs):
+                run._r.getparent().remove(run._r)
+            if is_header:
+                para.alignment = PP_ALIGN.CENTER
+            run = para.add_run()
+            run.text = str(row_data[ci]) if ci < len(row_data) else ""
+
+            font = run.font
+            font.name = font_name
+            font.size = Pt(hdr_sz if is_header else body_sz)
+            font.bold = is_header
+            if is_header:
+                font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+
+    logger.info(
+        f"[PPTBuilder] Reference table: {num_rows}r x {num_cols}c "
+        f"(style {ref.get('style_id', TRANSPARENT_TABLE_STYLE_ID)})"
+    )
+
+
+def _set_table_style_id(tbl_shape, style_id: str) -> None:
+    """Set (replacing any existing) the tableStyleId on a table shape."""
+    try:
+        from pptx.oxml.ns import qn
+        from lxml import etree
+
+        tbl_element = tbl_shape._element
+        tbl = tbl_element.find(".//" + qn("a:tbl"))
+        if tbl is None:
+            return
+        tblPr = tbl.find(qn("a:tblPr"))
+        if tblPr is None:
+            tblPr = etree.SubElement(tbl, qn("a:tblPr"))
+            tbl.insert(0, tblPr)
+        # transparent design: no banding flags, just the style id
+        for attr in ("firstRow", "bandRow"):
+            if attr in tblPr.attrib:
+                del tblPr.attrib[attr]
+        existing = tblPr.find(qn("a:tableStyleId"))
+        if existing is not None:
+            tblPr.remove(existing)
+        style_elem = etree.SubElement(tblPr, qn("a:tableStyleId"))
+        style_elem.text = style_id
+    except Exception as e:
+        logger.warning(f"[PPTBuilder] Table style error: {e}")
 
 
 def _set_placeholder_font_size(ph, size_pt: float) -> None:
@@ -426,15 +763,20 @@ def _update_cover_subtitle(slide, content) -> None:
         if shape.shape_type == 17 and hasattr(shape, "text_frame"):
             # This is likely the subtitle textbox (type TEXT_BOX, not a placeholder)
             tf = shape.text_frame
-            # Clear and set
+            # Clear extra paragraphs, then set text on the first run so its
+            # formatting (size, color, font) is preserved
             while len(tf.paragraphs) > 1:
                 p = tf.paragraphs[-1]._p
                 p.getparent().remove(p)
             para = tf.paragraphs[0]
-            for run in list(para.runs):
-                run._r.getparent().remove(run._r)
-            run = para.add_run()
-            run.text = subtitle_text
+            runs = para.runs
+            if runs:
+                runs[0].text = subtitle_text
+                for run in runs[1:]:
+                    run._r.getparent().remove(run._r)
+            else:
+                run = para.add_run()
+                run.text = subtitle_text
             logger.debug(f"[PPTBuilder] Cover subtitle updated: {subtitle_text!r}")
             return
 

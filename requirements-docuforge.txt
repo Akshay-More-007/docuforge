@@ -24,5 +24,12 @@ passlib[bcrypt]>=1.7.4
 # Async compatibility for Streamlit
 nest-asyncio>=1.6.0
 
+# Gemini async client needs modern aiohttp (old 3.8 lacks ClientConnectorDNSError)
+aiohttp>=3.10
+
+# Learn mode voice input: st.audio_input needs streamlit>=1.39 (deploy pins 1.52)
+streamlit>=1.39
+
 # Already in base toolkit but listed for reference:
-# langchain-groq, langchain-google-genai, langgraph, fastapi, streamlit, python-dotenv, pypdf
+# langchain-groq (also provides the groq SDK used for Whisper STT),
+# langchain-google-genai, langgraph, fastapi, python-dotenv, pypdf
