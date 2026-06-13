@@ -14,6 +14,13 @@ langchain-core==1.3.2
 langchain-groq==1.1.2
 langchain-google-genai==4.2.3
 langgraph==1.1.10
+# Gemini's async client (google-genai) needs aiohttp>=3.10 — older 3.8 lacks
+# ClientConnectorDNSError and crashes the document/learn Gemini path. The
+# document task now routes to Gemini by default, so this floor is required.
+aiohttp>=3.10
+# groq SDK used directly for Whisper STT (Learn mode voice answers). Pulled
+# transitively by langchain-groq, pinned here since src/learn imports it.
+groq>=0.11
 
 # Auth (Supabase)
 supabase==2.30.0
