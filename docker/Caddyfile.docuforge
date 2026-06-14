@@ -1,34 +1,36 @@
 # DocuForge — Caddy reverse proxy that terminates TLS on 8501.
 #
 # Why: the Learn-mode microphone (getUserMedia) only works in a "secure
-# context" — i.e. HTTPS. The VM has no domain (bare IP) and only port 8501 is
-# open in the Oracle VCN, so a public Let's Encrypt cert isn't possible here
-# (ACME needs 80/443). Caddy's internal CA issues a self-signed cert for the
-# IP instead; browsers warn once, the user proceeds, and the mic then works.
+# context" — i.e. HTTPS. The VM has no real domain and only port 8501 is open
+# in the Oracle VCN, so a public Let's Encrypt cert isn't possible here (ACME
+# needs 80/443). Caddy's internal CA issues a self-signed cert instead;
+# browsers warn once, the user proceeds, and the mic then works.
 #
-# To upgrade to a clean trusted cert later: open 80+443 in the Oracle VCN,
-# then swap the site block for `92-4-74-197.sslip.io { reverse_proxy ... }`
-# (Caddy auto-provisions Let's Encrypt) and publish 80+443 on the caddy
-# service instead of 8501.
+# Canonical URL is the sslip.io hostname (92-4-74-197.sslip.io -> 92.4.74.197,
+# pure DNS, no registration): a hostname makes the browser send SNI, which
+# Caddy needs to select the cert. Bare-IP access sends no SNI, so default_sni
+# below falls back to the hostname cert for it.
+#
+# Upgrade to a CLEAN trusted cert later: open 80+443 in the Oracle VCN, publish
+# 80+443 on the caddy service instead of 8501, and drop the `:8501` ports +
+# `tls internal` — Caddy will auto-provision Let's Encrypt for the sslip.io
+# hostname and the browser warning disappears.
 
 {
-	# No ACME (bare IP). Don't try to stand up an HTTP->HTTPS redirect vhost
-	# on port 80 — it isn't published, and 8501 serves HTTPS directly.
+	# No ACME (self-signed). Don't stand up an HTTP->HTTPS redirect vhost on
+	# port 80 — it isn't published, and 8501 serves HTTPS directly.
 	auto_https disable_redirects
 
-	# Clients connecting to a bare IP send NO SNI, so Caddy can't tell which
-	# cert to serve and aborts the handshake. Pin the IP cert as the default
-	# (no SNI) and the fallback (unrecognised SNI) so the IP connection works.
-	default_sni 92.4.74.197
-	fallback_sni 92.4.74.197
+	# Bare-IP clients send no SNI; serve the hostname's cert as the default so
+	# that handshake still completes.
+	default_sni 92-4-74-197.sslip.io
 }
 
-https://92.4.74.197:8501 {
-	# Self-signed cert from Caddy's internal CA, with the IP in the SAN.
+https://92-4-74-197.sslip.io:8501, https://92.4.74.197:8501 {
+	# Self-signed cert from Caddy's internal CA.
 	tls internal
 
-	# Streamlit speaks plain HTTP internally; Caddy adds TLS in front.
-	# reverse_proxy forwards websocket upgrades (/_stcore/stream) and the
-	# file-upload XHR transparently.
+	# Streamlit speaks plain HTTP internally; Caddy adds TLS in front and
+	# forwards websocket upgrades (/_stcore/stream) + the upload XHR.
 	reverse_proxy docuforge:8501
 }
