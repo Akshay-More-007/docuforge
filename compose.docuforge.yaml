@@ -1,4 +1,9 @@
-# DocuForge — single-container deployment (Streamlit app with in-process agent graph).
+# DocuForge — Streamlit app (in-process agent graph) behind a Caddy HTTPS proxy.
+#
+# Caddy terminates TLS on 8501 with a self-signed internal cert so the browser
+# has a SECURE CONTEXT — required for the Learn-mode microphone (getUserMedia).
+# The app container is internal-only; only Caddy is published to the host.
+#
 # Usage: docker compose -f compose.docuforge.yaml up -d --build
 services:
   docuforge:
@@ -6,16 +11,38 @@ services:
       context: .
       dockerfile: docker/Dockerfile.docuforge
     image: docuforge:latest
-    ports:
-      - "8501:8501"
+    # Internal only — reached by Caddy over the compose network, not published.
+    expose:
+      - "8501"
     env_file:
       - .env
     environment:
       # Persist semantic memory in the named volume regardless of what .env says.
       - FAISS_INDEX_DIR=/data/faiss_index
+      # Behind the Caddy reverse proxy: relax Streamlit's same-origin checks so
+      # the websocket (/_stcore/stream) and file-upload XHR work through TLS
+      # termination. The app is auth-gated and only reachable via Caddy.
+      - STREAMLIT_SERVER_ENABLE_CORS=false
+      - STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=false
     volumes:
       - docuforge_faiss:/data/faiss_index
     restart: unless-stopped
 
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - docuforge
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./docker/Caddyfile.docuforge:/etc/caddy/Caddyfile:ro
+      # Persist the internal CA + issued cert so users don't have to re-trust
+      # a freshly-generated cert after every restart.
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
 volumes:
   docuforge_faiss:
+  caddy_data:
+  caddy_config:
