@@ -15,6 +15,12 @@
 	# No ACME (bare IP). Don't try to stand up an HTTP->HTTPS redirect vhost
 	# on port 80 — it isn't published, and 8501 serves HTTPS directly.
 	auto_https disable_redirects
+
+	# Clients connecting to a bare IP send NO SNI, so Caddy can't tell which
+	# cert to serve and aborts the handshake. Pin the IP cert as the default
+	# (no SNI) and the fallback (unrecognised SNI) so the IP connection works.
+	default_sni 92.4.74.197
+	fallback_sni 92.4.74.197
 }
 
 https://92.4.74.197:8501 {
